@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Community Radar</title>
+  <style>
+    :root { --fg: #1a1a1a; --muted: #666; --bg: #fafafa; --card: #fff; --line: #e3e3e3;
+            --warn-bg: #fff6db; --warn: #7a5a00; --err-bg: #fde8e8; --err: #9b1c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #eee; --muted: #aaa; --bg: #151515; --card: #1f1f1f; --line: #333;
+              --warn-bg: #3a3014; --warn: #f3d27a; --err-bg: #3d1a1a; --err: #f5a3a3; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+    h1 { margin: 0 0 4px; font-size: 1.6rem; }
+    p.sub { margin: 0 0 24px; color: var(--muted); }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; min-width: 0; padding: 10px 12px; font: inherit; border: 1px solid var(--line);
+            border-radius: 8px; background: var(--card); color: var(--fg); }
+    button { padding: 10px 16px; font: inherit; border: 0; border-radius: 8px; background: #2f6feb;
+             color: #fff; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .banner { margin-top: 16px; padding: 12px; border-radius: 8px; }
+    .warn { background: var(--warn-bg); color: var(--warn); }
+    .err { background: var(--err-bg); color: var(--err); }
+    .loading { margin-top: 16px; color: var(--muted); }
+    .card { margin-top: 16px; padding: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+    .verdict { font-size: 1.4rem; font-weight: 700; text-transform: capitalize; }
+    .reason { color: var(--muted); margin-bottom: 16px; }
+    dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0; }
+    dt { color: var(--muted); font-size: .85rem; }
+    dd { margin: 0; font-size: 1.15rem; font-weight: 600; }
+    h2 { font-size: 1rem; margin: 20px 0 8px; }
+    a { color: #2f6feb; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Community Radar</h1>
+  <p class="sub">Is a GitHub repo gaining real traction, riding hype, quietly building, or dormant?</p>
+
+  <form id="form">
+    <input id="repo" placeholder="owner/name, e.g. astral-sh/uv" autocomplete="off" required>
+    <button id="go">Scan</button>
+  </form>
+
+  <div id="loading" class="loading" hidden>Scanning GitHub and Hacker News…</div>
+  <div id="error" class="banner err" hidden></div>
+  <div id="warning" class="banner warn" hidden></div>
+
+  <section id="result" class="card" hidden>
+    <div id="verdict" class="verdict"></div>
+    <div id="reason" class="reason"></div>
+    <h2>GitHub</h2>
+    <dl id="gh"></dl>
+    <div id="hn-block">
+      <h2>Hacker News (last 90 days)</h2>
+      <dl id="hn"></dl>
+      <p id="top"></p>
+    </div>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const VERDICTS = { real_traction: "🚀 Real traction", hype: "🔥 Hype",
+                     quiet_builder: "🛠️ Quiet builder", dormant: "💤 Dormant" };
+
+  function show(state) {
+    $("loading").hidden = state !== "loading";
+    $("go").disabled = state === "loading";
+    if (state === "loading") { $("error").hidden = $("warning").hidden = $("result").hidden = true; }
+  }
+
+  function fillStats(el, pairs) {
+    el.replaceChildren(...pairs.map(([k, v]) => {
+      const div = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      div.append(dt, dd);
+      return div;
+    }));
+  }
+
+  function render(data) {
+    const gh = data.github;
+    $("verdict").textContent = VERDICTS[data.verdict] || data.verdict;
+    $("reason").textContent = `${gh.full_name}: ${data.reason}`;
+    fillStats($("gh"), [["Stars", gh.stars.toLocaleString()], ["Forks", gh.forks.toLocaleString()],
+                        ["Open issues", gh.open_issues.toLocaleString()],
+                        ["Last push", new Date(gh.pushed_at).toLocaleDateString()]]);
+
+    $("hn-block").hidden = !data.hn;
+    if (data.hn) {
+      fillStats($("hn"), [["Stories", data.hn.stories], ["Points", data.hn.points], ["Comments", data.hn.comments]]);
+      const top = $("top");
+      top.replaceChildren();
+      if (data.hn.top_story) {
+        const a = document.createElement("a");
+        a.href = data.hn.top_story.url;
+        a.textContent = data.hn.top_story.title;
+        a.target = "_blank"; a.rel = "noopener";
+        top.append("Top story: ", a, ` (${data.hn.top_story.points} points)`);
+      }
+    }
+
+    if (data.warnings.includes("hn_unavailable")) {
+      $("warning").textContent = "Hacker News is unavailable right now. Showing GitHub data only; the verdict assumes no HN buzz.";
+      $("warning").hidden = false;
+    }
+    $("result").hidden = false;
+  }
+
+  function errorMessage(status, body) {
+    if (status === 422) return "Enter a repository as owner/name (letters, digits, -, _ and .).";
+    if (body?.error === "github_rate_limited") {
+      const when = body.reset_at ? new Date(body.reset_at).toLocaleTimeString() : "later";
+      return `GitHub rate limit reached. Try again after ${when}.`;
+    }
+    return body?.message || `Request failed (${status}).`;
+  }
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const repo = $("repo").value.trim();
+    show("loading");
+    try {
+      const res = await fetch(`/api/radar?repo=${encodeURIComponent(repo)}`);
+      const body = await res.json().catch(() => null);
+      show("done");
+      if (!res.ok) throw new Error(errorMessage(res.status, body));
+      render(body);
+    } catch (err) {
+      show("done");
+      $("error").textContent = err.message || "Network error. Is the server running?";
+      $("error").hidden = false;
+    }
+  });
+</script>
+</body>
+</html>
