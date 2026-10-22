@@ -33,7 +33,7 @@ def gh_repo(stars=5000, days_ago=3):
 
 def hn_body(points=(300, 50)):
     hits = [
-        {"objectID": str(i), "title": f"Story {i}", "points": p, "num_comments": 10}
+        {"objectID": str(i), "title": f"Story {i} about acme/widget", "points": p, "num_comments": 10}
         for i, p in enumerate(points)
     ]
     return {"nbHits": len(hits), "hits": hits}
@@ -58,11 +58,31 @@ def test_happy_path():
         "points": 350,
         "comments": 20,
         "top_story": {
-            "title": "Story 0",
+            "title": "Story 0 about acme/widget",
             "points": 300,
             "url": "https://news.ycombinator.com/item?id=0",
         },
     }
+
+
+@respx.mock
+def test_hn_hits_without_exact_repo_text_are_dropped():
+    hits = [
+        {"objectID": "1", "title": "Show HN: Widget", "url": "https://github.com/ACME/Widget",
+         "points": 40, "num_comments": 5},
+        {"objectID": "2", "title": "Ask HN", "story_text": "I use acme/widget daily",
+         "points": 10, "num_comments": 2},
+        {"objectID": "3", "title": "Acme widgets and more", "url": "https://acme.example",
+         "points": 900, "num_comments": 300},
+        {"objectID": "4", "title": "acme/widgetry", "points": None, "num_comments": None},
+    ]
+    mock(hn={"nbHits": 250, "hits": hits})
+    r = client.get("/api/radar", params={"repo": "acme/widget"})
+    hn = r.json()["hn"]
+    assert hn["stories"] == 3
+    assert hn["points"] == 50
+    assert hn["comments"] == 7
+    assert hn["top_story"]["url"] == "https://news.ycombinator.com/item?id=1"
 
 
 @respx.mock
@@ -111,6 +131,56 @@ def test_github_rate_limited():
     assert r.json()["reset_at"] == "2023-11-14T22:13:20+00:00"
 
 
+@pytest.mark.parametrize(
+    "status, headers",
+    [
+        (403, {"retry-after": "60", "x-ratelimit-remaining": "4000"}),
+        (429, {"retry-after": "60"}),
+    ],
+)
+@respx.mock
+def test_github_secondary_rate_limit(status, headers):
+    respx.get(GH_URL).mock(return_value=httpx.Response(status, headers=headers))
+    respx.get(HN_URL).mock(return_value=httpx.Response(200, json=hn_body()))
+    before = datetime.now(timezone.utc)
+    r = client.get("/api/radar", params={"repo": "acme/widget"})
+    assert r.status_code == 429
+    assert r.json()["error"] == "github_rate_limited"
+    reset_at = datetime.fromisoformat(r.json()["reset_at"])
+    assert before + timedelta(seconds=59) <= reset_at <= before + timedelta(seconds=65)
+
+
+@respx.mock
+def test_github_429_without_headers_is_rate_limited():
+    respx.get(GH_URL).mock(return_value=httpx.Response(429))
+    respx.get(HN_URL).mock(return_value=httpx.Response(200, json=hn_body()))
+    r = client.get("/api/radar", params={"repo": "acme/widget"})
+    assert r.status_code == 429
+    assert r.json()["reset_at"] is None
+
+
+@respx.mock
+def test_plain_github_403_is_unavailable():
+    respx.get(GH_URL).mock(return_value=httpx.Response(403))
+    respx.get(HN_URL).mock(return_value=httpx.Response(200, json=hn_body()))
+    r = client.get("/api/radar", params={"repo": "acme/widget"})
+    assert r.status_code == 502
+    assert r.json()["error"] == "github_unavailable"
+
+
+@respx.mock
+def test_renamed_repo_follows_redirect():
+    new_url = "https://api.github.com/repositories/123"
+    respx.get(GH_URL).mock(return_value=httpx.Response(301, headers={"location": new_url}))
+    respx.get(new_url).mock(
+        return_value=httpx.Response(200, json={**gh_repo(), "full_name": "acme/gadget"})
+    )
+    respx.get(HN_URL).mock(return_value=httpx.Response(200, json=hn_body()))
+    r = client.get("/api/radar", params={"repo": "acme/widget"})
+    assert r.status_code == 200
+    assert r.json()["repo"] == "acme/gadget"
+
+
 @respx.mock
 def test_repo_not_found():
     respx.get(GH_URL).mock(return_value=httpx.Response(404))
@@ -126,7 +196,7 @@ def test_bad_github_token():
     r = client.get("/api/radar", params={"repo": "acme/widget"})
     assert r.status_code == 502
     assert r.json() == {
-        "error": "github_token_invalid",
+        "error": "github_unavailable",
         "message": "GITHUB_TOKEN is invalid or expired.",
     }
 

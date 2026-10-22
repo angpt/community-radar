@@ -5,7 +5,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.radar import GitHubAuthError, GitHubRateLimited, RepoNotFound, UpstreamError, get_radar
+from app.radar import GitHubRateLimited, RepoNotFound, UpstreamError, get_radar
 
 REPO_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"
 
@@ -23,14 +23,6 @@ async def radar(repo: Annotated[str, Query(pattern=REPO_PATTERN)]):
                 "error": "github_rate_limited",
                 "message": "GitHub API rate limit exceeded. Set GITHUB_TOKEN or retry later.",
                 "reset_at": exc.reset_at,
-            },
-        )
-    except GitHubAuthError:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "error": "github_token_invalid",
-                "message": "GITHUB_TOKEN is invalid or expired.",
             },
         )
     except RepoNotFound:

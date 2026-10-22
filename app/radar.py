@@ -30,10 +30,6 @@ class RepoNotFound(Exception):
     pass
 
 
-class GitHubAuthError(Exception):
-    pass
-
-
 class UpstreamError(Exception):
     pass
 
@@ -53,23 +49,43 @@ async def get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx
     raise AssertionError("unreachable")
 
 
+def rate_limit_reset_at(headers: httpx.Headers) -> str | None:
+    """ISO-8601 UTC time when GitHub will accept requests again, if it says.
+
+    Secondary rate limits send retry-after (seconds); primary ones send x-ratelimit-reset (epoch).
+    """
+    try:
+        if retry_after := headers.get("retry-after"):
+            reset = time.time() + int(retry_after)
+        elif reset_header := headers.get("x-ratelimit-reset"):
+            reset = int(reset_header)
+        else:
+            return None
+    except ValueError:
+        return None
+    return datetime.fromtimestamp(reset, timezone.utc).isoformat()
+
+
 async def fetch_github(client: httpx.AsyncClient, repo: str) -> dict:
     headers = {"Accept": "application/vnd.github+json"}
     if token := os.environ.get("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
     try:
-        resp = await get_with_retry(client, f"{GITHUB_API}/repos/{repo}", headers=headers)
+        # Renamed or transferred repos answer with a 301 to the new location.
+        resp = await get_with_retry(
+            client, f"{GITHUB_API}/repos/{repo}", headers=headers, follow_redirects=True
+        )
     except httpx.TransportError as exc:
         raise UpstreamError(f"GitHub unreachable: {exc.__class__.__name__}") from exc
 
-    if resp.status_code in (403, 429) and resp.headers.get("x-ratelimit-remaining") == "0":
-        reset = resp.headers.get("x-ratelimit-reset")
-        reset_at = (
-            datetime.fromtimestamp(int(reset), timezone.utc).isoformat() if reset else None
-        )
-        raise GitHubRateLimited(reset_at)
+    retry_after = resp.headers.get("retry-after")
+    if resp.status_code == 429 or (
+        resp.status_code == 403
+        and (resp.headers.get("x-ratelimit-remaining") == "0" or retry_after)
+    ):
+        raise GitHubRateLimited(rate_limit_reset_at(resp.headers))
     if resp.status_code == 401:
-        raise GitHubAuthError()
+        raise UpstreamError("GITHUB_TOKEN is invalid or expired.")
     if resp.status_code == 404:
         raise RepoNotFound(repo)
     if resp.status_code != 200:
@@ -97,11 +113,17 @@ async def fetch_hn(client: httpx.AsyncClient, repo: str) -> dict:
     resp = await get_with_retry(client, HN_SEARCH, params=params)
     resp.raise_for_status()
     body = resp.json()
-    hits = body.get("hits", [])
+    # Algolia's keyword search is fuzzy, so keep only stories with the exact owner/name text.
+    needle = repo.lower()
+    hits = [
+        h
+        for h in body.get("hits", [])
+        if any(needle in (h.get(f) or "").lower() for f in ("title", "url", "story_text"))
+    ]
 
     top = max(hits, key=lambda h: h.get("points") or 0, default=None)
     return {
-        "stories": body.get("nbHits", len(hits)),
+        "stories": len(hits),
         "points": sum(h.get("points") or 0 for h in hits),
         "comments": sum(h.get("num_comments") or 0 for h in hits),
         "top_story": top and {

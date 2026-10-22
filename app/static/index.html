@@ -117,8 +117,8 @@
   function errorMessage(status, body) {
     if (status === 422) return "Enter a repository as owner/name (letters, digits, -, _ and .).";
     if (body?.error === "github_rate_limited") {
-      const when = body.reset_at ? new Date(body.reset_at).toLocaleTimeString() : "later";
-      return `GitHub rate limit reached. Try again after ${when}.`;
+      const when = body.reset_at ? `after ${new Date(body.reset_at).toLocaleTimeString()}` : "later";
+      return `GitHub rate limit reached. Try again ${when}.`;
     }
     return body?.message || `Request failed (${status}).`;
   }
