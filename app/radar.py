@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -102,6 +103,18 @@ async def fetch_github(client: httpx.AsyncClient, repo: str) -> dict:
     }
 
 
+def repo_mention_pattern(repo: str) -> re.Pattern:
+    """Match owner/name as a whole repo name, case-insensitive.
+
+    facebook/react must not match facebook/react-native or vercel/next match vercel/next.js,
+    but a trailing sentence period or .git suffix is fine.
+    """
+    return re.compile(
+        rf"(?<![A-Za-z0-9-]){re.escape(repo)}(?![A-Za-z0-9_-]|\.(?!git\b)[A-Za-z0-9_-])",
+        re.IGNORECASE,
+    )
+
+
 async def fetch_hn(client: httpx.AsyncClient, repo: str) -> dict:
     since = int(time.time()) - HN_WINDOW_DAYS * 86400
     params = {
@@ -114,11 +127,11 @@ async def fetch_hn(client: httpx.AsyncClient, repo: str) -> dict:
     resp.raise_for_status()
     body = resp.json()
     # Algolia's keyword search is fuzzy, so keep only stories with the exact owner/name text.
-    needle = repo.lower()
+    pattern = repo_mention_pattern(repo)
     hits = [
         h
         for h in body.get("hits", [])
-        if any(needle in (h.get(f) or "").lower() for f in ("title", "url", "story_text"))
+        if any(pattern.search(h.get(f) or "") for f in ("title", "url", "story_text"))
     ]
 
     top = max(hits, key=lambda h: h.get("points") or 0, default=None)

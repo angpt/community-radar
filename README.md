@@ -36,7 +36,7 @@ docker run -p 8000:8000 -e GITHUB_TOKEN=$GITHUB_TOKEN community-radar
 
 ```mermaid
 flowchart LR
-    B[Browser<br/>static/index.html] -->|GET /api/radar?repo=| API[FastAPI<br/>app/main.py]
+    B[Browser<br/>app/static/index.html] -->|GET /api/radar?repo=| API[FastAPI<br/>app/main.py]
     API -->|regex check, 422 on bad input| API
     API --> C{Cache<br/>10 min TTL}
     C -->|hit| API
@@ -88,7 +88,7 @@ The rules are checked in this order. The thresholds are constants at the top of 
 | `hype` | At least 100 HN points but fewer than 1,000 stars |
 | `quiet_builder` | Everything else: recently active with little HN buzz |
 
-HN points are summed over the matching stories among the top 100 HN search results for `owner/name`. A story matches when its title, URL or text contains `owner/name` (case-insensitive).
+HN points are summed over the matching stories among the top 100 HN search results for `owner/name`. A story matches when its title, URL or text contains `owner/name` as a whole repo name, ignoring case. For example, `facebook/react` doesn't match `facebook/react-native`.
 
 ## API Free-tier limits
 

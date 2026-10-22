@@ -74,7 +74,9 @@ def test_hn_hits_without_exact_repo_text_are_dropped():
          "points": 10, "num_comments": 2},
         {"objectID": "3", "title": "Acme widgets and more", "url": "https://acme.example",
          "points": 900, "num_comments": 300},
-        {"objectID": "4", "title": "acme/widgetry", "points": None, "num_comments": None},
+        {"objectID": "4", "title": "acme/widgetry", "points": 500, "num_comments": 80},
+        {"objectID": "5", "title": "Notes on acme/widget.", "url": "https://github.com/acme/widget/issues/1",
+         "points": None, "num_comments": None},
     ]
     mock(hn={"nbHits": 250, "hits": hits})
     r = client.get("/api/radar", params={"repo": "acme/widget"})
@@ -83,6 +85,27 @@ def test_hn_hits_without_exact_repo_text_are_dropped():
     assert hn["points"] == 50
     assert hn["comments"] == 7
     assert hn["top_story"]["url"] == "https://news.ycombinator.com/item?id=1"
+
+
+@pytest.mark.parametrize(
+    "text, matches",
+    [
+        ("Show HN: facebook/react 19", True),
+        ("https://github.com/facebook/react/pull/1", True),
+        ("git clone https://github.com/facebook/react.git", True),
+        ("I like facebook/react.", True),
+        ("(facebook/react)", True),
+        ("FACEBOOK/REACT", True),
+        ("facebook/react-native", False),
+        ("facebook/react_dom", False),
+        ("facebook/reactor", False),
+        ("facebook/react.js", False),
+        ("notfacebook/react", False),
+        ("my-facebook/react", False),
+    ],
+)
+def test_repo_mention_pattern(text, matches):
+    assert bool(radar.repo_mention_pattern("facebook/react").search(text)) is matches
 
 
 @respx.mock
@@ -202,7 +225,7 @@ def test_bad_github_token():
 
 
 @pytest.mark.parametrize(
-    "repo", ["", "acme", "acme/", "/widget", "acme/widget/extra", "ac me/widget", "-acme/widget", "acme/wid;get"]
+    "repo", ["", "acme", "acme/", "/widget", "acme/widget/extra", "ac me/widget", "-acme/widget", "acme/wid;get", "acme/.", "acme/.."]
 )
 def test_invalid_input(repo):
     r = client.get("/api/radar", params={"repo": repo})
