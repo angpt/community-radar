@@ -111,9 +111,11 @@ def test_repo_mention_pattern(text, matches):
 @respx.mock
 def test_second_call_is_cached():
     mock()
-    client.get("/api/radar", params={"repo": "acme/widget"})
+    first = client.get("/api/radar", params={"repo": "acme/widget"})
+    assert first.json()["cached"] is False
     r = client.get("/api/radar", params={"repo": "ACME/widget"})
     assert r.json()["cached"] is True
+    assert r.json()["checked_at"] == first.json()["checked_at"]  # time of the original lookup
     assert respx.calls.call_count == 2  # one GitHub + one HN call total
 
 
@@ -246,3 +248,24 @@ def test_verdicts(stars, days_ago, points, expected):
     mock(gh=gh_repo(stars=stars, days_ago=days_ago), hn=hn_body(points))
     r = client.get("/api/radar", params={"repo": "acme/widget"})
     assert r.json()["verdict"] == expected
+
+
+@pytest.mark.parametrize(
+    "stars, days_ago, points, expected",
+    [
+        (5000, 3, 300, "300 HN points and 5,000 stars. Real traction needs 100+ HN points and 1,000+ stars."),
+        (50, 3, 300, "300 HN points but only 50 stars. Real traction needs 100+ HN points and 1,000+ stars."),
+        (61000, 3, 1, "Active (last push 3 days ago) with 61,000 stars but only 1 HN point in 90 days. "
+                      "Real traction needs 100+ HN points and 1,000+ stars."),
+        (61000, 0, 0, "Active (last push today) with 61,000 stars but only 0 HN points in 90 days. "
+                      "Real traction needs 100+ HN points and 1,000+ stars."),
+        (1, 1, 0, "Active (last push yesterday) with 1 star but only 0 HN points in 90 days. "
+                  "Real traction needs 100+ HN points and 1,000+ stars."),
+        (5000, 400, 300, "No push in 400 days. Repos with no push in more than 180 days are dormant."),
+    ],
+)
+def test_verdict_reason_states_the_rule(stars, days_ago, points, expected):
+    now = datetime.now(timezone.utc)
+    github = {"stars": stars, "pushed_at": (now - timedelta(days=days_ago)).isoformat()}
+    _, reason = radar.compute_verdict(github, {"points": points}, now=now)
+    assert reason == expected

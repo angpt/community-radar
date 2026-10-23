@@ -6,10 +6,14 @@
   <title>Community Radar</title>
   <style>
     :root { --fg: #1a1a1a; --muted: #666; --bg: #fafafa; --card: #fff; --line: #e3e3e3;
-            --warn-bg: #fff6db; --warn: #7a5a00; --err-bg: #fde8e8; --err: #9b1c1c; }
+            --warn-bg: #fff6db; --warn: #7a5a00; --err-bg: #fde8e8; --err: #9b1c1c;
+            --v-traction-bg: #e3f4e8; --v-traction: #1b6b34; --v-hype-bg: #fff1d6; --v-hype: #7a4f00;
+            --v-quiet-bg: #eceef1; --v-quiet: #454b53; --v-dormant-bg: #fde8e8; --v-dormant: #9b1c1c; }
     @media (prefers-color-scheme: dark) {
       :root { --fg: #eee; --muted: #aaa; --bg: #151515; --card: #1f1f1f; --line: #333;
-              --warn-bg: #3a3014; --warn: #f3d27a; --err-bg: #3d1a1a; --err: #f5a3a3; }
+              --warn-bg: #3a3014; --warn: #f3d27a; --err-bg: #3d1a1a; --err: #f5a3a3;
+              --v-traction-bg: #173723; --v-traction: #8fd9a8; --v-hype-bg: #3a2e12; --v-hype: #f3cf7a;
+              --v-quiet-bg: #2a2d31; --v-quiet: #c6cbd1; --v-dormant-bg: #3d1a1a; --v-dormant: #f5a3a3; }
     }
     * { box-sizing: border-box; }
     body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
@@ -27,8 +31,23 @@
     .err { background: var(--err-bg); color: var(--err); }
     .loading { margin-top: 16px; color: var(--muted); }
     .card { margin-top: 16px; padding: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
-    .verdict { font-size: 1.4rem; font-weight: 700; text-transform: capitalize; }
-    .reason { color: var(--muted); margin-bottom: 16px; }
+    .verdict { display: inline-block; padding: 4px 14px; border-radius: 999px; font-size: 1.3rem; font-weight: 700;
+               background: var(--v-quiet-bg); color: var(--v-quiet); }
+    .verdict.real_traction { background: var(--v-traction-bg); color: var(--v-traction); }
+    .verdict.hype { background: var(--v-hype-bg); color: var(--v-hype); }
+    .verdict.dormant { background: var(--v-dormant-bg); color: var(--v-dormant); }
+    .repo-name { display: inline-block; margin-top: 10px; font-weight: 600; }
+    .reason { color: var(--muted); }
+    .checked { margin: 6px 0 16px; color: var(--muted); font-size: .85rem; }
+    details.raw { margin-top: 16px; }
+    details.raw summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+    details.raw pre { margin: 8px 0 0; padding: 12px; overflow-x: auto; font-size: .8rem; line-height: 1.4;
+                      background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+    .examples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px;
+                color: var(--muted); font-size: .9rem; }
+    .chip { padding: 3px 10px; font: inherit; font-size: .85rem; border: 1px solid var(--line); border-radius: 999px;
+            background: var(--card); color: var(--fg); cursor: pointer; }
+    .chip:hover { border-color: #2f6feb; }
     dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0; }
     dt { color: var(--muted); font-size: .85rem; }
     dd { margin: 0; font-size: 1.15rem; font-weight: 600; }
@@ -43,9 +62,15 @@
   <p class="sub">Is a GitHub repo gaining real traction, riding hype, quietly building, or dormant?</p>
 
   <form id="form">
-    <input id="repo" placeholder="owner/name, e.g. astral-sh/uv" autocomplete="off" required>
+    <input id="repo" placeholder="owner/name or GitHub URL, e.g. astral-sh/uv" autocomplete="off" required>
     <button id="go">Scan</button>
   </form>
+  <div class="examples">
+    Try:
+    <button type="button" class="chip" data-repo="astral-sh/uv">astral-sh/uv</button>
+    <button type="button" class="chip" data-repo="facebook/react">facebook/react</button>
+    <button type="button" class="chip" data-repo="fastapi/fastapi">fastapi/fastapi</button>
+  </div>
 
   <div id="loading" class="loading" hidden>Scanning GitHub and Hacker News…</div>
   <div id="error" class="banner err" hidden></div>
@@ -53,7 +78,9 @@
 
   <section id="result" class="card" hidden>
     <div id="verdict" class="verdict"></div>
+    <div><a id="repo-name" class="repo-name" target="_blank" rel="noopener"></a></div>
     <div id="reason" class="reason"></div>
+    <div id="checked" class="checked"></div>
     <h2>GitHub</h2>
     <dl id="gh"></dl>
     <div id="hn-block">
@@ -62,6 +89,11 @@
       <p id="top"></p>
     </div>
   </section>
+
+  <details id="raw" class="raw" hidden>
+    <summary>View raw JSON</summary>
+    <pre id="raw-body"></pre>
+  </details>
 </main>
 
 <script>
@@ -72,7 +104,26 @@
   function show(state) {
     $("loading").hidden = state !== "loading";
     $("go").disabled = state === "loading";
-    if (state === "loading") { $("error").hidden = $("warning").hidden = $("result").hidden = true; }
+    if (state === "loading") {
+      $("error").hidden = $("warning").hidden = $("result").hidden = $("raw").hidden = true;
+    }
+  }
+
+  // Accept owner/name or a pasted GitHub URL such as https://github.com/owner/name/tree/main.
+  function normalizeRepo(input) {
+    const value = input.trim();
+    const m = value.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/?#\s]+)\/([^/?#\s]+)/i);
+    return m ? `${m[1]}/${m[2].replace(/\.git$/i, "")}` : value;
+  }
+
+  function daysAgo(iso) {
+    const days = Math.floor((Date.now() - new Date(iso)) / 86400000);
+    return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days.toLocaleString()} days ago`;
+  }
+
+  function showRaw(url, status, body) {
+    $("raw-body").textContent = `GET ${url}\nHTTP ${status}\n\n${body ? JSON.stringify(body, null, 2) : "(no JSON body)"}`;
+    $("raw").hidden = false;
   }
 
   function fillStats(el, pairs) {
@@ -88,10 +139,17 @@
   function render(data) {
     const gh = data.github;
     $("verdict").textContent = VERDICTS[data.verdict] || data.verdict;
-    $("reason").textContent = `${gh.full_name}: ${data.reason}`;
+    $("verdict").className = `verdict ${data.verdict}`;
+    $("repo-name").textContent = gh.full_name;
+    $("repo-name").href = gh.url;
+    $("reason").textContent = data.reason;
+    const checked = new Date(data.checked_at).toLocaleString();
+    $("checked").textContent = data.cached
+      ? `Checked ${checked} · served from cache (results are kept for 10 minutes)`
+      : `Checked ${checked} · fresh from GitHub and Hacker News`;
     fillStats($("gh"), [["Stars", gh.stars.toLocaleString()], ["Forks", gh.forks.toLocaleString()],
                         ["Open issues", gh.open_issues.toLocaleString()],
-                        ["Last push", new Date(gh.pushed_at).toLocaleDateString()]]);
+                        ["Last push", `${new Date(gh.pushed_at).toLocaleDateString()} (${daysAgo(gh.pushed_at)})`]]);
 
     $("hn-block").hidden = !data.hn;
     if (data.hn) {
@@ -123,14 +181,25 @@
     return body?.message || `Request failed (${status}).`;
   }
 
-  $("form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const repo = $("repo").value.trim();
+  // The page URL carries ?repo=owner/name so a result can be bookmarked and shared.
+  function repoFromUrl() {
+    return normalizeRepo(new URLSearchParams(location.search).get("repo") || "");
+  }
+
+  function setUrl(repo) {
+    if (repoFromUrl() === repo) return;
+    history.pushState(null, "", `?repo=${encodeURIComponent(repo).replace(/%2F/gi, "/")}`);
+  }
+
+  async function scan(repo) {
+    $("repo").value = repo;
     show("loading");
     try {
-      const res = await fetch(`/api/radar?repo=${encodeURIComponent(repo)}`);
+      const url = `/api/radar?repo=${encodeURIComponent(repo)}`;
+      const res = await fetch(url);
       const body = await res.json().catch(() => null);
       show("done");
+      showRaw(url, res.status, body);
       if (!res.ok) throw new Error(errorMessage(res.status, body));
       render(body);
     } catch (err) {
@@ -138,7 +207,23 @@
       $("error").textContent = err.message || "Network error. Is the server running?";
       $("error").hidden = false;
     }
+  }
+
+  $("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const repo = normalizeRepo($("repo").value);
+    setUrl(repo);
+    scan(repo);
   });
+
+  document.querySelectorAll(".chip").forEach((chip) => chip.addEventListener("click", () => {
+    setUrl(chip.dataset.repo);
+    scan(chip.dataset.repo);
+  }));
+
+  // Back/forward between scanned repos, and scanning a shared link on load.
+  window.addEventListener("popstate", () => { if (repoFromUrl()) scan(repoFromUrl()); });
+  if (repoFromUrl()) scan(repoFromUrl());
 </script>
 </body>
 </html>

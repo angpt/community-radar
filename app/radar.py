@@ -147,21 +147,47 @@ async def fetch_hn(client: httpx.AsyncClient, repo: str) -> dict:
     }
 
 
+def _count(n: int, word: str) -> str:
+    return f"{n:,} {word}" if n == 1 else f"{n:,} {word}s"
+
+
+def _ago(days: int) -> str:
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    return f"{days:,} days ago"
+
+
 def compute_verdict(github: dict, hn: dict | None, now: datetime | None = None) -> tuple[str, str]:
-    """Deterministic verdict. Missing HN data counts as zero buzz."""
+    """Deterministic verdict, with a reason that states the rule it was decided by.
+
+    Missing HN data counts as zero buzz.
+    """
     now = now or datetime.now(timezone.utc)
     pushed = datetime.fromisoformat(github["pushed_at"].replace("Z", "+00:00"))
     idle_days = (now - pushed).days
     points = hn["points"] if hn else 0
     stars = github["stars"]
+    traction_rule = f"Real traction needs {BUZZ_POINTS}+ HN points and {TRACTION_STARS:,}+ stars."
 
     if idle_days > DORMANT_DAYS:
-        return "dormant", f"No push in {idle_days} days."
+        return "dormant", (
+            f"No push in {_count(idle_days, 'day')}. "
+            f"Repos with no push in more than {DORMANT_DAYS} days are dormant."
+        )
     if points >= BUZZ_POINTS and stars >= TRACTION_STARS:
-        return "real_traction", f"{points} HN points and {stars} stars."
+        return "real_traction", (
+            f"{_count(points, 'HN point')} and {_count(stars, 'star')}. {traction_rule}"
+        )
     if points >= BUZZ_POINTS:
-        return "hype", f"{points} HN points but only {stars} stars."
-    return "quiet_builder", f"Active (last push {idle_days}d ago) with little HN buzz."
+        return "hype", (
+            f"{_count(points, 'HN point')} but only {_count(stars, 'star')}. {traction_rule}"
+        )
+    return "quiet_builder", (
+        f"Active (last push {_ago(idle_days)}) with {_count(stars, 'star')} but only "
+        f"{_count(points, 'HN point')} in {HN_WINDOW_DAYS} days. {traction_rule}"
+    )
 
 
 async def get_radar(repo: str) -> dict:
@@ -190,6 +216,8 @@ async def get_radar(repo: str) -> dict:
         "github": github,
         "hn": hn,
         "warnings": warnings,
+        # Cached responses keep the time of the original lookup.
+        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     # Partial results aren't cached so we recover as soon as HN is back.
     if not warnings:
